@@ -189,7 +189,7 @@ namespace BigQuery.Linq
                 MaxResults = MaxResults,
                 PreserveNulls = PreserveNulls,
                 TimeoutMs = TimeoutMs,
-                UseQueryCache = UseQueryCache
+                UseQueryCache = UseQueryCache,
             };
             var request = BigQueryService.Jobs.Query(body, ProjectId);
             request.PrettyPrint = false;
@@ -199,12 +199,33 @@ namespace BigQuery.Linq
         public QueryResponse<T> Run<T>(string query)
         {
             var sw = Stopwatch.StartNew();
-            var queryResponse = BuildRequest(query, isForceDry: false).Execute();
-            sw.Stop();
+            var request = BuildRequest(query, isForceDry: false);
+            var queryResponse = request.Execute();
             if (queryResponse.JobComplete == false)
             {
+                sw.Stop();
                 throw new TimeoutException("Job is uncompleted maybe timeout, you can change QueryContext.TimeoutMs. ExecutionTime:" + sw.Elapsed);
             }
+            var jobId = queryResponse.JobReference.JobId;
+            var projectId = queryResponse.JobReference.ProjectId;
+            var pageToken = queryResponse.PageToken;
+
+            if ((ulong)queryResponse.Rows.Count < queryResponse.TotalRows)
+            {
+                GetQueryResultsResponse furtherQueryResponse;
+                do
+                {
+                    var furtherRequest = BigQueryService.Jobs.GetQueryResults(projectId,jobId);
+                    furtherRequest.PageToken = pageToken;
+                    furtherQueryResponse = furtherRequest.Execute();
+                    pageToken = furtherQueryResponse.PageToken;
+                    foreach (var tableRow in furtherQueryResponse.Rows)
+                    {
+                        queryResponse.Rows.Add(tableRow);
+                    }
+                } while (!string.IsNullOrEmpty(pageToken));
+            }
+            sw.Stop();
 
             var response = new QueryResponse<T>(this, query, sw.Elapsed, queryResponse, isDynamic: false);
             return response;
